@@ -212,7 +212,7 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg):
     return prs_data
 
 
-def pr_overview(prs, go):
+def pr_overview(prs_data, go):
     """Create overview of PRs using supplied data, print to stdout"""
     downloading_msg = "Downloading PR data for %s/%s repo..." % (go.options.github_account, go.options.repository)
     print(downloading_msg)
