@@ -310,7 +310,7 @@ def main():
 
     actions = ['comment', 'merge', 'review', 'test']
 
-    go = simple_option(go_dict=opts, descr="Script to print overview of pull requests for a GitHub repository")
+    go = simple_option(go_dict=opts)
 
     # determine which action should be taken
     selected_action = None
