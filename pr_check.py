@@ -150,7 +150,7 @@ def merge(github, github_user, github_account, repository, pr_data, force=False)
 
         if not DRY_RUN:
             body = {
-                'commit_message': '',
+                'commit_message': pr_data['title'],
                 'sha': pr_data['head']['sha'],
             }
             status, data = github.repos[github_account][repository].pulls[pr_data['number']].merge.put(body=body)
