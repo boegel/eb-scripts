@@ -309,11 +309,11 @@ def test(pr_data, arg):
 
 #######################################################################################################################
 
-def travis(github_token):
+def travis(github_account, repository, github_token):
     """Scan Travis test runs for failures, and return notification to be sent to PR if one is found"""
     travis = travispy.TravisPy.github_auth(github_token)
 
-    repo_slug = 'hpcugent/easybuild-easyconfigs'
+    repo_slug = '%s/%s' % (github_account, repository)
     last_builds = travis.builds(slug=repo_slug, event_type='pull_request')
 
     done_prs = []
@@ -349,10 +349,14 @@ def travis(github_token):
             pr_comment += "full log at %s\n" % job_url
 
             # try to filter log to just the stuff that matters
-            log_lines = jobs[0][1].log.body.split('\n')
-            for idx, log_line in enumerate(log_lines):
-                if log_line.startswith('FAIL:') or log_line.startswith('ERROR:'):
-                    retained_log_lines = log_lines[idx:]
+            retained_log_lines = jobs[0][1].log.body.split('\n')
+            for idx, log_line in enumerate(retained_log_lines):
+                if repository == 'easybuild-easyconfigs':
+                    if log_line.startswith('FAIL:') or log_line.startswith('ERROR:'):
+                        retained_log_lines = retained_log_lines[idx:]
+                        break
+                elif log_line.strip().endswith("$ python -O -m test.%s.suite" % repository.split('-')[-1]):
+                    retained_log_lines = retained_log_lines[idx:]
                     break
 
             pr_comment += '```\n...\n'
@@ -425,11 +429,11 @@ def main():
     github = RestClient(GITHUB_API_URL, username=github_user, token=github_token, user_agent='eb-pr-check')
 
     if selected_action[0] == 'travis':
-        res = travis(github_token)
+        res = travis(github_account, repository, github_token)
         if res:
             for pr, pr_comment, check_msg in res:
                 pr_data = fetch_pr_data(github, github_account, repository, pr)
-                comment(github, github_user, repository, pr_data, pr_comment, check_msg=check_msg, verbose=False)
+                comment(github, github_user, repository, pr_data, pr_comment, check_msg=check_msg, verbose=DRY_RUN)
         else:
             print "Found no PRs to notify, all done here!"
 
