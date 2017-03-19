@@ -111,7 +111,7 @@ def print_pr_summary(pr_data):
 
 #######################################################################################################################
 
-def comment(github, github_user, repository, pr_data, msg, check_msg=None):
+def comment(github, github_user, repository, pr_data, msg, check_msg=None, verbose=True):
     """Post a comment in the pull request."""
     # decode message first, if needed
     known_msgs = {
@@ -141,7 +141,10 @@ def comment(github, github_user, repository, pr_data, msg, check_msg=None):
         print "Message not found yet (using pattern '%s'), stand back for posting!" % check_msg
 
     target = '%s/%s' % (pr_data['base']['repo']['owner']['login'], pr_data['base']['repo']['name'])
-    info("Posting comment as user '%s' in %s PR #%s: \"%s\"" % (github_user, target, pr_data['number'], msg))
+    if verbose:
+        info("Posting comment as user '%s' in %s PR #%s: \"%s\"" % (github_user, target, pr_data['number'], msg))
+    else:
+        info("Posting comment as user '%s' in %s PR #%s" % (github_user, target, pr_data['number']))
     if not DRY_RUN:
         post_comment_in_issue(pr_data['number'], msg, repo=repository, github_user=github_user)
     print "Done!"
@@ -315,6 +318,7 @@ def travis(github_token):
 
     done_prs = []
 
+    res = []
     for build in last_builds:
         bid, pr = build.number, build.pull_request_number
 
@@ -329,12 +333,12 @@ def travis(github_token):
 
         else:
             build_url = os.path.join(TRAVIS_URL, repo_slug, 'builds', str(build.id))
-            print "\n[id: %s] PR #%s - %s - %s" % (bid, pr, build.state, build_url)
+            print "[id: %s] PR #%s - %s - %s" % (bid, pr, build.state, build_url)
 
             jobs = [(str(job_id), travis.jobs(ids=[job_id])[0]) for job_id in sorted(build.job_ids)]
             jobs_ok = [job.successful for (_, job) in jobs]
 
-            pr_comment = "%d/%d test suite runs failed - " % (jobs_ok.count(False), len(jobs))
+            pr_comment = "Travis test report: %d/%d runs failed - " % (jobs_ok.count(False), len(jobs))
             pr_comment += "see %s\n" % build_url
             check_msg = pr_comment.strip()
             pr_comment += "\nonly showing partial log for 1st failed test suite run %s\n" % jobs[0][1].number
@@ -359,7 +363,11 @@ def travis(github_token):
                 job_url = os.path.join(TRAVIS_URL, repo_slug, 'jobs', job_id)
                 pr_comment += "* %s - %s => log available at %s\n" % (job.number, job.state, job_url)
 
-            return (pr, pr_comment, check_msg)
+            res.append((pr, pr_comment, check_msg))
+
+    print "Processed %d builds, found %d PRs with failed builds to report back on" % (len(last_builds), len(res))
+
+    return res
 
 #######################################################################################################################
 
@@ -413,44 +421,44 @@ def main():
     check_msg = None
     github_token = fetch_github_token(github_user)
 
-    if selected_action[0] == 'travis':
-        res = travis(github_token)
-        if res:
-            pr, pr_comment, check_msg = res
-            selected_action = ('comment', pr_comment)
-        else:
-            print "Found no PRs to notify, all done here!"
-            return
-
     # prepare using GitHub API
     github = RestClient(GITHUB_API_URL, username=github_user, token=github_token, user_agent='eb-pr-check')
 
-    if pr is None:
+    if selected_action[0] == 'travis':
+        res = travis(github_token)
+        if res:
+            for pr, pr_comment, check_msg in res:
+                pr_data = fetch_pr_data(github, github_account, repository, pr)
+                comment(github, github_user, repository, pr_data, pr_comment, check_msg=check_msg, verbose=False)
+        else:
+            print "Found no PRs to notify, all done here!"
+
+    else:
         if len(go.args) == 1:
             pr = go.args[0]
         else:
             usage()
 
-    print "Fetching PR information ",
-    print "(using GitHub token for user '%s': %s)... " % (github_user, ('no', 'yes')[bool(github_token)]),
-    sys.stdout.flush()
-    pr_data = fetch_pr_data(github, github_account, repository, pr)
-    print ''
+        print "Fetching PR information ",
+        print "(using GitHub token for user '%s': %s)... " % (github_user, ('no', 'yes')[bool(github_token)]),
+        sys.stdout.flush()
+        pr_data = fetch_pr_data(github, github_account, repository, pr)
+        print ''
 
-    #print_raw_pr_info(pr_data)
+        #print_raw_pr_info(pr_data)
 
-    print_pr_summary(pr_data)
+        print_pr_summary(pr_data)
 
-    if selected_action[0] == 'comment':
-        comment(github, github_user, repository, pr_data, selected_action[1], check_msg=check_msg)
-    elif selected_action[0] == 'merge':
-        merge(github, github_user, github_account, repository, pr_data, force=force)
-    elif selected_action[0] == 'review':
-        review(pr_data)
-    elif selected_action[0] == 'test':
-        test(pr_data, selected_action[1])
-    else:
-        error("Handling action '%s' not implemented yet" % selected_action[0])
+        if selected_action[0] == 'comment':
+            comment(github, github_user, repository, pr_data, selected_action[1], check_msg=check_msg)
+        elif selected_action[0] == 'merge':
+            merge(github, github_user, github_account, repository, pr_data, force=force)
+        elif selected_action[0] == 'review':
+            review(pr_data)
+        elif selected_action[0] == 'test':
+            test(pr_data, selected_action[1])
+        else:
+            error("Handling action '%s' not implemented yet" % selected_action[0])
 
 
 if __name__ == '__main__':

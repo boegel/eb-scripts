@@ -25,6 +25,7 @@ Print overview of pull requests for specified GitHub repository.
 @author: Kenneth Hoste (Ghent University)
 """
 import cPickle
+import dateutil.parser
 import datetime
 import matplotlib
 matplotlib.use('PDF')  # must be done before next matplotlib import
@@ -193,16 +194,31 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg):
                     else:
                         # for closed PRs, just issue data suffices
                         pr_data = issue
-                        sys.stdout.write(' [closed], ')
+                        gh_repo = github.repos[github_account][repository]
+                        status, more_pr_data = gh_repo.pulls[issue['number']].get()
+                        pr_data['is_merged'] = more_pr_data['merged']
+                        if pr_data['is_merged']:
+                            sys.stdout.write(' [MERGED], ')
+                        else:
+                            sys.stdout.write(' [closed], ')
 
                     sys.stdout.flush()
                     prs_data.append(pr_data)
                     pr_nrs.append(pr_data['number'])
+                elif issue['number'] in pr_nrs:
+                    sys.stdout.write("* known PR #%s, " % issue['number'])
+                else:
+                    sys.stdout.write("* issue #%s [IGNORED], " % issue['number'])
 
             sys.stdout.write('\n')
             # update last issue nr and since timestamp
-            last_issue_nr = sorted([issue['number'] for issue in issues_data])[-1]
+            sorted_issues = sorted([issue['number'] for issue in issues_data])
+            last_issue_nr = sorted_issues[-1]
+            last_since = since
             since = [issue for issue in issues_data if issue['number'] == last_issue_nr][0]['updated_at']
+            if last_since == since:
+                since = dateutil.parser.parse(since) + datetime.timedelta(hours=1)
+                print "new since: ", since
 
     print("%s DONE!" % msg)
     pickle_file = PICKLE_FILE % repository
