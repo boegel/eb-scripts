@@ -25,8 +25,10 @@ Pull request checker for EasyBuild repositories
 
 @author: Kenneth Hoste (Ghent University)
 """
+import os
 import re
 import sys
+import travispy
 from vsc.utils.generaloption import simple_option
 from vsc.utils.rest import RestClient
 
@@ -36,6 +38,8 @@ from easybuild.tools.run import run_cmd
 
 from pr_overview import fetch_pr_data
 
+
+TRAVIS_URL = 'https://travis-ci.org'
 
 DRY_RUN = False
 MERGE_USER = 'boegel'
@@ -107,7 +111,7 @@ def print_pr_summary(pr_data):
 
 #######################################################################################################################
 
-def comment(github, github_user, repository, pr_data, msg):
+def comment(github, github_user, repository, pr_data, msg, check_msg=None):
     """Post a comment in the pull request."""
     # decode message first, if needed
     known_msgs = {
@@ -126,6 +130,15 @@ def comment(github, github_user, repository, pr_data, msg):
                 error("No such user on GitHub: %s" % github_login)
         else:
             error("Unknown coded comment message: %s" % msg)
+
+    # only actually post comment if it wasn't posted before
+    if check_msg:
+        msg_regex = re.compile(check_msg, re.M)
+        for comment in pr_data['issue_comments']['bodies']:
+            if msg_regex.search(comment):
+                print "Message already found (using pattern '%s'), not posting comment again!" % check_msg
+                return
+        print "Message not found yet (using pattern '%s'), stand back for posting!" % check_msg
 
     target = '%s/%s' % (pr_data['base']['repo']['owner']['login'], pr_data['base']['repo']['name'])
     info("Posting comment as user '%s' in %s PR #%s: \"%s\"" % (github_user, target, pr_data['number'], msg))
@@ -293,6 +306,64 @@ def test(pr_data, arg):
 
 #######################################################################################################################
 
+def travis(github_token):
+    """Scan Travis test runs for failures, and return notification to be sent to PR if one is found"""
+    travis = travispy.TravisPy.github_auth(github_token)
+
+    repo_slug = 'hpcugent/easybuild-easyconfigs'
+    last_builds = travis.builds(slug=repo_slug, event_type='pull_request')
+
+    done_prs = []
+
+    for build in last_builds:
+        bid, pr = build.number, build.pull_request_number
+
+        if pr in done_prs:
+            print "(skipping test suite run for already processed PR #%s)" % pr
+            continue
+
+        done_prs.append(pr)
+
+        if build.successful:
+            print "(skipping successful test suite run %s for PR %s)" % (bid, pr)
+
+        else:
+            build_url = os.path.join(TRAVIS_URL, repo_slug, 'builds', str(build.id))
+            print "\n[id: %s] PR #%s - %s - %s" % (bid, pr, build.state, build_url)
+
+            jobs = [(str(job_id), travis.jobs(ids=[job_id])[0]) for job_id in sorted(build.job_ids)]
+            jobs_ok = [job.successful for (_, job) in jobs]
+
+            pr_comment = "%d/%d test suite runs failed - " % (jobs_ok.count(False), len(jobs))
+            pr_comment += "see %s\n" % build_url
+            check_msg = pr_comment.strip()
+            pr_comment += "\nonly showing partial log for 1st failed test suite run %s\n" % jobs[0][1].number
+
+            jobs = [(job_id, job) for (job_id, job) in jobs if job.unsuccessful]
+
+            job_url = os.path.join(TRAVIS_URL, repo_slug, 'jobs', jobs[0][0])
+            pr_comment += "full log at %s\n" % job_url
+
+            # try to filter log to just the stuff that matters
+            log_lines = jobs[0][1].log.body.split('\n')
+            for idx, log_line in enumerate(log_lines):
+                if log_line.startswith('FAIL:') or log_line.startswith('ERROR:'):
+                    retained_log_lines = log_lines[idx:]
+                    break
+
+            pr_comment += '```\n...\n'
+            pr_comment += '\n'.join(retained_log_lines[-100:])
+            pr_comment += '\n```\n'
+
+            for (job_id, job) in jobs[1:]:
+                job_url = os.path.join(TRAVIS_URL, repo_slug, 'jobs', job_id)
+                pr_comment += "* %s - %s => log available at %s\n" % (job.number, job.state, job_url)
+
+            return (pr, pr_comment, check_msg)
+
+#######################################################################################################################
+
+
 def main():
 
     opts = {
@@ -306,9 +377,10 @@ def main():
         'merge': ("Merge the pull request", None, 'store_true', False, 'M'),
         'review': ("Review the pull request", None, 'store_true', False, 'R'),
         'test': ("Submit job to upload test report", None, 'store_or_None', None, 'T'),
+        'travis': ("Scan Travis test results, notify of failed tests in PRs", None, 'store_true', False),
     }
 
-    actions = ['comment', 'merge', 'review', 'test']
+    actions = ['comment', 'merge', 'review', 'test', 'travis']
 
     go = simple_option(go_dict=opts)
 
@@ -330,7 +402,6 @@ def main():
     else:
         info("Selected action: %s" % selected_action[0])
 
-    # prepare using GitHub API
     global DRY_RUN
     DRY_RUN = go.options.dry_run
     force = go.options.force
@@ -338,13 +409,27 @@ def main():
     github_user = go.options.github_user
     repository = go.options.repository
 
+    pr = None
+    check_msg = None
     github_token = fetch_github_token(github_user)
+
+    if selected_action[0] == 'travis':
+        res = travis(github_token)
+        if res:
+            pr, pr_comment, check_msg = res
+            selected_action = ('comment', pr_comment)
+        else:
+            print "Found no PRs to notify, all done here!"
+            return
+
+    # prepare using GitHub API
     github = RestClient(GITHUB_API_URL, username=github_user, token=github_token, user_agent='eb-pr-check')
 
-    if len(go.args) == 1:
-        pr = go.args[0]
-    else:
-        usage()
+    if pr is None:
+        if len(go.args) == 1:
+            pr = go.args[0]
+        else:
+            usage()
 
     print "Fetching PR information ",
     print "(using GitHub token for user '%s': %s)... " % (github_user, ('no', 'yes')[bool(github_token)]),
@@ -357,7 +442,7 @@ def main():
     print_pr_summary(pr_data)
 
     if selected_action[0] == 'comment':
-        comment(github, github_user, repository, pr_data, selected_action[1])
+        comment(github, github_user, repository, pr_data, selected_action[1], check_msg=check_msg)
     elif selected_action[0] == 'merge':
         merge(github, github_user, github_account, repository, pr_data, force=force)
     elif selected_action[0] == 'review':
