@@ -309,7 +309,7 @@ def test(pr_data, arg):
 
 #######################################################################################################################
 
-def travis(github_account, repository, github_token):
+def travis(github_account, repository, github_token, owner=None):
     """Scan Travis test runs for failures, and return notification to be sent to PR if one is found"""
     travis = travispy.TravisPy.github_auth(github_token)
 
@@ -341,11 +341,11 @@ def travis(github_account, repository, github_token):
             pr_comment = "Travis test report: %d/%d runs failed - " % (jobs_ok.count(False), len(jobs))
             pr_comment += "see %s\n" % build_url
             check_msg = pr_comment.strip()
-            pr_comment += "\nonly showing partial log for 1st failed test suite run %s\n" % jobs[0][1].number
 
             jobs = [(job_id, job) for (job_id, job) in jobs if job.unsuccessful]
-
             job_url = os.path.join(TRAVIS_URL, repo_slug, 'jobs', jobs[0][0])
+
+            pr_comment += "\nOnly showing partial log for 1st failed test suite run %s;\n" % jobs[0][1].number
             pr_comment += "full log at %s\n" % job_url
 
             # try to filter log to just the stuff that matters
@@ -365,7 +365,11 @@ def travis(github_account, repository, github_token):
 
             for (job_id, job) in jobs[1:]:
                 job_url = os.path.join(TRAVIS_URL, repo_slug, 'jobs', job_id)
-                pr_comment += "* %s - %s => log available at %s\n" % (job.number, job.state, job_url)
+                pr_comment += "* %s - %s => %s\n" % (job.number, job.state, job_url)
+
+            if owner:
+                pr_comment += "*(bleep, bloop, I'm just a bot, "
+                pr_comment += "please talk to my owner @%s if you notice you me acting stupid)*" % owner
 
             res.append((pr, pr_comment, check_msg))
 
@@ -383,6 +387,7 @@ def main():
         'force': ("Use force to execute the specified action", None, 'store_true', False, 'f'),
         'github-account': ("GitHub account where repository is located", None, 'store', 'hpcugent', 'a'),
         'github-user': ("GitHub user to use (for authenticated access)", None, 'store', 'boegel', 'u'),
+        'owner': ("Owner of the bot account that is used", None, 'store', None),
         'repository': ("Repository to use", None, 'store', 'easybuild-easyconfigs', 'r'),
         # actions
         'comment': ("Post a comment in the pull request", None, 'store', None, 'C'),
@@ -419,6 +424,7 @@ def main():
     force = go.options.force
     github_account = go.options.github_account
     github_user = go.options.github_user
+    owner = go.options.owner
     repository = go.options.repository
 
     pr = None
@@ -429,7 +435,7 @@ def main():
     github = RestClient(GITHUB_API_URL, username=github_user, token=github_token, user_agent='eb-pr-check')
 
     if selected_action[0] == 'travis':
-        res = travis(github_account, repository, github_token)
+        res = travis(github_account, repository, github_token, owner=owner)
         if res:
             for pr, pr_comment, check_msg in res:
                 pr_data = fetch_pr_data(github, github_account, repository, pr)
