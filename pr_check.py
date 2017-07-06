@@ -5,7 +5,7 @@
 # This file is part of EasyBuild,
 # originally created by the HPC team of the University of Ghent (http://ugent.be/hpc).
 #
-# http://github.com/hpcugent/easybuild
+# http://github.com/easybuilders/easybuild
 #
 # EasyBuild is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -385,7 +385,7 @@ def main():
     opts = {
         'dry-run': ("Dry run, don't actually post/push/merge anything", None, 'store_true', False, 'x'),
         'force': ("Use force to execute the specified action", None, 'store_true', False, 'f'),
-        'github-account': ("GitHub account where repository is located", None, 'store', 'hpcugent', 'a'),
+        'github-account': ("GitHub account where repository is located", None, 'store', 'easybuilders', 'a'),
         'github-user': ("GitHub user to use (for authenticated access)", None, 'store', 'boegel', 'u'),
         'owner': ("Owner of the bot account that is used", None, 'store', None),
         'repository': ("Repository to use", None, 'store', 'easybuild-easyconfigs', 'r'),
