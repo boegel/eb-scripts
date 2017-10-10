@@ -27,12 +27,16 @@ Print overview of pull requests for specified GitHub repository.
 import cPickle
 import dateutil.parser
 import datetime
-import matplotlib
-matplotlib.use('PDF')  # must be done before next matplotlib import
-import matplotlib.pyplot as plt
-import pandas as pd
 import socket
 import sys
+
+try:
+   import pandas as pd
+   import matplotlib
+   matplotlib.use('PDF')  # must be done before next matplotlib import
+   import matplotlib.pyplot as plt
+except ImportError:
+   pass
 
 from vsc.utils import fancylogger
 from vsc.utils.dateandtime import date_parser, datetime_parser
