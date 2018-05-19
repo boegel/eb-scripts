@@ -450,12 +450,32 @@ def plot_prs_by_author(created_ats, authors, repository):
         day += ONE_DAY
 
     # filter author counts, only show top 10 author, collapse remaining authors into 'other'
-    other_idxs = []
-    sorted_author_counts = sorted(enumerate(author_counts), key=lambda (_, y): y)
+    sorted_author_counts = sorted(enumerate(author_counts[-1]), key=lambda (_, y): y, reverse=True)
+    top_idxs = [idx for (idx, _) in sorted_author_counts[:20]]
+    other_idxs = [idx for idx in range(len(uniq_authors)) if idx not in top_idxs]
 
-    pd_df = pd.DataFrame(author_counts, days, columns=uniq_authors).sort_index().fillna(method='ffill')
+    plot_author_counts = []
+    for day_counts in author_counts:
+        plot_day_counts = []
+
+        for idx in top_idxs[::-1]:
+            plot_day_counts.append(day_counts[idx])
+
+        other_day_count = 0
+        for idx in other_idxs:
+            other_day_count += day_counts[idx]
+        plot_day_counts.append(other_day_count)
+
+        plot_author_counts.append(plot_day_counts)
+
+    plot_authors = []
+    for idx in top_idxs[::-1]:
+        plot_authors.append('%s (%d)' % (uniq_authors[idx], author_counts[-1][idx]))
+    plot_authors.append('OTHER (%d)' % plot_author_counts[-1][-1])
+
+    pd_df = pd.DataFrame(plot_author_counts, days, columns=plot_authors).sort_index().fillna(method='ffill')
     res = pd_df.plot(kind='area', stacked=True, title="%s PRs by author (stacked)" % repository)
-    res.legend(ncol=5, fontsize='small')
+    res.legend(ncol=2, fontsize='small', loc='best')
     plt.savefig('%s_PR_per_author_stacked' % repository)
 
 
