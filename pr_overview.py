@@ -33,6 +33,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import socket
 import sys
+import time
 
 from vsc.utils import fancylogger
 from vsc.utils.dateandtime import date_parser, datetime_parser
@@ -121,18 +122,33 @@ def fetch_pr_data(github, github_account, repository, pr):
     pr_data = None
     try:
         gh_repo = github.repos[github_account][repository]
-        status, pr_data = gh_repo.pulls[pr].get()
+        status = None
+        while status is None:
+            try:
+                status, pr_data = gh_repo.pulls[pr].get()
+            except Exception as err:
+                print "PR #%d => Oops, encountered exception: %s" % (pr, err)
+                print "Trying again in 10s..."
+                time.sleep(10)
+                status = None
         sys.stdout.write("[data]")
 
         # enhance PR data with test result for last commit
         pr_data['unit_test_result'] = 'UNKNOWN'
         if 'head' in pr_data:
             sha = pr_data['head']['sha']
-            try:
-                gh_repo = github.repos[github_account][repository]
-                status, status_data = gh_repo.commits[sha].status.get()
-            except socket.gaierror, err:
-                raise EasyBuildError("Failed to download commit status for PR %s: %s", pr, err)
+            status = None
+            while status is None:
+                try:
+                    gh_repo = github.repos[github_account][repository]
+                    status, status_data = gh_repo.commits[sha].status.get()
+                except socket.gaierror, err:
+                    raise EasyBuildError("Failed to download commit status for PR %s: %s", pr, err)
+                except Exception as err:
+                    print "SHA %s => Oops, encountered exception: %s" % (sha, err)
+                    print "Trying again in 10s..."
+                    time.sleep(10)
+                    status = None
             log.debug("status: %d, commit status data: %s", status, status_data)
             if status_data:
                 pr_data['combined_status'] = status_data['state']
@@ -140,7 +156,15 @@ def fetch_pr_data(github, github_account, repository, pr):
 
         # also pull in issue comments (note: these do *not* include review comments or commit comments)
         gh_repo = github.repos[github_account][repository]
-        status, comments_data = gh_repo.issues[pr].comments.get()
+        status = None
+        while status is None:
+            try:
+                status, comments_data = gh_repo.issues[pr].comments.get()
+            except Exception as err:
+                print "issues #%d => Oops, encountered exception: %s" % (pr, err)
+                print "Trying again in 10s..."
+                time.sleep(10)
+                status = None
         pr_data['issue_comments'] = {
             'users': [c['user']['login'] for c in comments_data],
             'bodies': [c['body'] for c in comments_data],
@@ -276,10 +300,12 @@ def plot_pr_stats(prs, go):
     """ Create plot overview of prs, save in pdf format"""
     created_ats = [datetime_parser(pr['created_at'].split('T')[0]) for pr in prs]
     closed_ats = [datetime_parser((pr['closed_at'] or 'T').split('T')[0] or 'ENDNEXTMONTH') for pr in prs]
+    authors = [pr['user']['login'] for pr in prs]
 
     print('Plotting...')
     plot_historic_PR_ages(created_ats, closed_ats, go.options.repository)
     plot_open_closed_PRs(created_ats, closed_ats, go.options.repository)
+    plot_prs_by_author(created_ats, authors, go.options.repository)
 
 
 def plot_historic_PR_ages(created_ats, closed_ats, repository):
@@ -399,6 +425,39 @@ def plot_open_closed_PRs(created_ats, closed_ats, repository):
     plt.savefig('%s_opened_closed_PRs_cumulative_month' % repository)
 
 
+def plot_prs_by_author(created_ats, authors, repository):
+    """Plot overview of PR authors."""
+    day = min(created_ats)
+    days = []
+
+    uniq_authors = nub(authors)
+    print "Found %d unique PR authors for %s repository" % (len(uniq_authors), repository)
+    author_counts = []
+
+    while day <= datetime_parser('TODAY'):
+        days.append(day)
+
+        counts = [0] * len(uniq_authors)
+        for idx in xrange(0, len(created_ats)):
+            if created_ats[idx] <= day:
+                for i, author in enumerate(uniq_authors):
+                    if authors[idx] == author:
+                        counts[i] += 1
+                        break
+
+        author_counts.append(counts)
+
+        day += ONE_DAY
+
+    # filter author counts, only show top 10 author, collapse remaining authors into 'other'
+    other_idxs = []
+    sorted_author_counts = sorted(enumerate(author_counts), key=lambda (_, y): y)
+
+    pd_df = pd.DataFrame(author_counts, days, columns=uniq_authors).sort_index().fillna(method='ffill')
+    res = pd_df.plot(kind='area', stacked=True, title="%s PRs by author (stacked)" % repository)
+    res.legend(ncol=5, fontsize='small')
+    plt.savefig('%s_PR_per_author_stacked' % repository)
+
 
 def gen_table_header():
     """Generate table header."""
@@ -515,8 +574,19 @@ def gen_table_rows(prs):
     return len(lines)-2, '\n'.join(lines), merged_today, last_update
 
 
+def dump_data(prs, go):
+    print 'PR#,user,state,created,merged,new_pr'
+    for pr in sorted(prs, key=(lambda x: x['number'])):
+        created = pr['created_at'].replace('T', ' ').replace('Z', '')
+        state = pr['state']
+        is_merged = pr.get('is_merged')
+        using_new_pr = "eb --new-pr" in (pr['body'] or '')
+        print "%s,%s,%s,%s,%s,%s" % (pr['number'], pr['user']['login'], state, created, is_merged, using_new_pr)
+
+
 def main():
     types = {
+        'dump': dump_data,
         'html': gen_pr_overview_page,
         'plot': plot_pr_stats,
         'print': pr_overview,
@@ -526,7 +596,7 @@ def main():
         'github-account': ("GitHub account where repository is located", None, 'store', 'easybuilders', 'a'),
         'github-user': ("GitHub user to use (for authenticated access)", None, 'store', 'boegel', 'u'),
         'repository': ("Repository to use", None, 'store', 'easybuild-easyconfigs', 'r'),
-        'type': ("Type of overview: 'print', html' or 'plot'", 'choice',
+        'type': ("Type of overview: 'dump', 'plot', 'print', or 'html'", 'choice',
                  'store_or_None', 'print', types.keys(), 't'),
     }
 
