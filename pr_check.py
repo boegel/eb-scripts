@@ -301,7 +301,7 @@ def test(pr_data, arg):
         "source /etc/profile.d/vsc.sh",
         "%sqsub eb_from_pr.sh -t %s" % (extra, pr_data['number']),
     ])
-    out, ec = run_cmd(cmd, simple=False, force_in_dry_run=True, trace=False)
+    out, ec = run_cmd(cmd, simple=False, force_in_dry_run=True, trace=False, stream_output=False)
     if ec == 0:
         print "Done, job ID: %s" % out
     else:
