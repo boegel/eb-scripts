@@ -31,6 +31,7 @@ import matplotlib
 matplotlib.use('PDF')  # must be done before next matplotlib import
 import matplotlib.pyplot as plt
 import pandas as pd
+import re
 import socket
 import sys
 import time
@@ -177,12 +178,46 @@ def fetch_pr_data(github, github_account, repository, pr):
     return pr_data
 
 
-def fetch_prs_data(pickle_file, github, github_account, repository, msg):
+def in_range(pr_nr, pr_range):
+    """Check whether specified PR number is within specified range."""
+    if pr_range:
+        pr_nr = int(pr_nr)
+        pr_range_low = int(pr_range[0])
+        pr_range_high = int(pr_range[1])
+        res = pr_range_low <= pr_nr <= pr_range_high
+    else:
+        res = True
+
+    return res
+
+
+def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_range=None, update=False):
     """Fetch data for all PRs."""
+    pr_range_low, pr_range_high = None, None
+    if pr_range:
+        pr_range_low = int(pr_range[0])
+        pr_range_high = int(pr_range[1])
+
     if pickle_file:
         print("Loading PR data from %s" % pickle_file)
         prs_data = cPickle.load(open(pickle_file, 'r'))
+        pr_nrs = [pr['number'] for pr in prs_data]
+    else:
+        prs_data, pr_nrs = [], []
 
+    if prs_data and not update:
+        # early return if no range is specified and PR data was read from file
+        return prs_data
+
+    # determine which PRs to fetch data for; either:
+    # * PRs in specified range
+    # * all PRs
+    # * none
+    if pr_range_low is not None and pr_range_high is not None:
+        pr_cnt = pr_range_high - pr_range_low + 1
+        # determine creation date of oldest PR
+        pr_data = fetch_pr_data(github, github_account, repository, pr_range_low)
+        since = pr_data['created_at']
     else:
         try:
             gh_repo = github.repos[github_account][repository]
@@ -190,59 +225,77 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg):
         except socket.gaierror, err:
             raise EasyBuildError("Failed to download list of pull requests: %s" % err)
         log.debug("status: %d, prs: %s" % (status, prs))
-        max_pr = max([pr['number'] for pr in prs])
+        pr_cnt = max([pr['number'] for pr in prs])
 
-        # check all issues in chunks of GITHUB_MAX_PER_PAGE, filter out PRs
-        prs_data, pr_nrs = [], []
         since = '1970-01-01T00:00:01Z'
-        last_issue_nr = 0
-        while last_issue_nr < max_pr:
-            sys.stdout.write("\n%s %s/%s (since %s)\n\n" % (msg, last_issue_nr, max_pr, since))
-            sys.stdout.flush()  # flush so progress is show with 'tee' too
 
-            try:
-                gh_repo = github.repos[github_account][repository]
-                status, issues_data = gh_repo.issues.get(since=since, per_page=GITHUB_MAX_PER_PAGE,
-                                                         state='all', sort='updated', direction='asc')
-            except socket.gaierror, err:
-                raise EasyBuildError("Failed to download issues since %s: %s", since, err)
+    # check all issues in chunks of GITHUB_MAX_PER_PAGE, filter out PRs
+    last_issue_nr = pr_range_low or 1
+    max_pr = pr_range_high or pr_cnt
+    while last_issue_nr < max_pr:
+        sys.stdout.write("\n%s %s/%s (since %s)\n\n" % (msg, last_issue_nr, max_pr, since))
+        sys.stdout.flush()  # flush so progress is show with 'tee' too
 
-            log.debug("status: %d, issues data since %s: %s", status, since, issues_data)
+        try:
+            gh_repo = github.repos[github_account][repository]
+            status, issues_data = gh_repo.issues.get(since=since, per_page=GITHUB_MAX_PER_PAGE,
+                                                     state='all', sort='updated', direction='asc')
+        except socket.gaierror, err:
+            raise EasyBuildError("Failed to download issues since %s: %s", since, err)
 
-            for issue in issues_data:
-                if 'pull_request' in issue and not issue['number'] in pr_nrs:
-                    sys.stdout.write("* PR #%s" % issue['number'])
-                    if issue['state'] == 'open':
-                        sys.stdout.write(" [open]")
-                        pr_data = fetch_pr_data(github, github_account, repository, issue['number'])
+        log.debug("status: %d, issues data since %s: %s", status, since, issues_data)
+
+        for issue in issues_data:
+            if 'pull_request' in issue and (update or not issue['number'] in pr_nrs):
+                sys.stdout.write("* PR #%s" % issue['number'])
+
+                if not in_range(issue['number'], pr_range):
+                    sys.stdout.write(' [out-of-range], ')
+                    continue
+
+                if issue['state'] == 'open':
+                    sys.stdout.write(" [open]")
+                    pr_data = fetch_pr_data(github, github_account, repository, issue['number'])
+                else:
+                    # for closed PRs, just issue data suffices
+                    pr_data = issue
+                    gh_repo = github.repos[github_account][repository]
+                    status, more_pr_data = gh_repo.pulls[issue['number']].get()
+                    pr_data['is_merged'] = more_pr_data['merged']
+                    if pr_data['is_merged']:
+                        sys.stdout.write(' [MERGED], ')
                     else:
-                        # for closed PRs, just issue data suffices
-                        pr_data = issue
-                        gh_repo = github.repos[github_account][repository]
-                        status, more_pr_data = gh_repo.pulls[issue['number']].get()
-                        pr_data['is_merged'] = more_pr_data['merged']
-                        if pr_data['is_merged']:
-                            sys.stdout.write(' [MERGED], ')
-                        else:
-                            sys.stdout.write(' [closed], ')
+                        sys.stdout.write(' [closed], ')
 
-                    sys.stdout.flush()
+                sys.stdout.flush()
+
+                pr_nr = pr_data['number']
+                if pr_nr in pr_nrs:
+                    for idx in xrange(len(prs_data)):
+                        if prs_data[idx]['number'] == pr_nr:
+                            prs_data[idx] = pr_data
+                            break
+                    if idx == len(prs_data):
+                        sys.stderr.write("Failed to replace PR data for PR #%s!" % pr_nr)
+                        sys.exit(1)
+                else:
                     prs_data.append(pr_data)
                     pr_nrs.append(pr_data['number'])
-                elif issue['number'] in pr_nrs:
-                    sys.stdout.write("* known PR #%s, " % issue['number'])
-                else:
-                    sys.stdout.write("* issue #%s [IGNORED], " % issue['number'])
 
-            sys.stdout.write('\n')
-            # update last issue nr and since timestamp
-            sorted_issues = sorted([issue['number'] for issue in issues_data])
-            last_issue_nr = sorted_issues[-1]
-            last_since = since
-            since = [issue for issue in issues_data if issue['number'] == last_issue_nr][0]['updated_at']
-            if last_since == since:
-                since = dateutil.parser.parse(since) + datetime.timedelta(hours=1)
-                print "new since: ", since
+            elif issue['number'] in pr_nrs:
+                sys.stdout.write("* known PR #%s, " % issue['number'])
+            else:
+                sys.stdout.write("* issue #%s [IGNORED], " % issue['number'])
+
+        sys.stdout.write('\n')
+        # update last issue nr and since timestamp
+        sorted_issues = sorted([issue['number'] for issue in issues_data])
+        last_issue_nr = sorted_issues[-1]
+        last_since = since
+        since = [issue for issue in issues_data if issue['number'] == last_issue_nr][0]['updated_at']
+        if last_since == since:
+            since = dateutil.parser.parse(since) + datetime.timedelta(hours=1)
+            print "new since: ", since
 
     print("%s DONE!" % msg)
     pickle_file = PICKLE_FILE % repository
@@ -260,11 +313,10 @@ def pr_overview(prs_data, go):
     print("Composing overview...")
     by_user = {}
     total_open_cnt = 0
-    total_cnt = 0
     print [pr_data for pr_data in prs_data if pr_data['state'] == 'open'][0]
     for pr_data in prs_data:
         user = pr_data['user']['login']
-        if not user in by_user:
+        if user not in by_user:
             by_user[user] = []
         by_user[user].append({
             'number': pr_data['number'],
@@ -615,27 +667,42 @@ def main():
     opts = {
         'github-account': ("GitHub account where repository is located", None, 'store', 'easybuilders', 'a'),
         'github-user': ("GitHub user to use (for authenticated access)", None, 'store', 'boegel', 'u'),
+        'range': ("Range for PRs to take into account", None, 'store', None, 'x'),
         'repository': ("Repository to use", None, 'store', 'easybuild-easyconfigs', 'r'),
         'type': ("Type of overview: 'dump', 'plot', 'print', or 'html'", 'choice',
                  'store_or_None', 'print', types.keys(), 't'),
+        'update': ("Update existing data", None, 'store_true', False),
     }
-
 
     go = simple_option(go_dict=opts, descr="Script to print overview of pull requests for a GitHub repository")
 
-    github_token = fetch_github_token(go.options.github_user)
-    github = RestClient(GITHUB_API_URL, username=go.options.github_user, token=github_token, user_agent='eb-pr-overview')
+    github_account = go.options.github_account
+    github_user = go.options.github_user
+
+    pr_range = None
+    if go.options.range:
+        print go.options.range
+        range_regex = re.compile('^[0-9]+-[0-9]+$')
+        if range_regex.match(go.options.range):
+            pr_range = go.options.range.split('-')
+        else:
+            sys.stderr.write("Range '%s' does not match pattern '%s'\n" % (go.options.range, range_regex.pattern))
+            sys.exit(1)
+
+    github_token = fetch_github_token(github_user)
+    github = RestClient(GITHUB_API_URL, username=github_user, token=github_token, user_agent='eb-pr-overview')
 
     pickle_file = None
     if go.args:
         pickle_file = go.args[0]
 
-    downloading_msg = "Downloading PR data for %s/%s repo..." % (go.options.github_account, go.options.repository)
+    downloading_msg = "Downloading PR data for %s/%s repo..." % (github_account, go.options.repository)
     print(downloading_msg)
-    prs = fetch_prs_data(pickle_file, github, go.options.github_account, go.options.repository, downloading_msg)
+    prs = fetch_prs_data(pickle_file, github, github_account, go.options.repository, downloading_msg,
+                         pr_range=pr_range, update=go.options.update)
 
-    # put options here
-    types[go.options.type](prs, go)
+    if go.options.type in types:
+        types[go.options.type](prs, go)
 
 
 if __name__ == '__main__':
