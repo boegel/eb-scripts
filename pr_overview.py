@@ -27,10 +27,6 @@ Print overview of pull requests for specified GitHub repository.
 import cPickle
 import dateutil.parser
 import datetime
-import matplotlib
-matplotlib.use('PDF')  # must be done before next matplotlib import
-import matplotlib.pyplot as plt
-import pandas as pd
 import re
 import socket
 import sys
