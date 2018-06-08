@@ -309,6 +309,28 @@ def test(pr_data, arg):
 
 #######################################################################################################################
 
+def is_fluke(job_log_txt):
+    """Detect fluke failures in Travis job log."""
+    fluke_patterns = [
+        r"Failed to connect to s3.amazonaws.com port [0-9]+: Connection timed out",
+        r"fatal: unable to access .*: Failed to connect to github.com port [0-9]+: Connection timed out",
+        r"Could not connect to ppa.launchpad.net.*, connection timed out",
+        r"Failed to fetch .* Unable to connect to ppa.launchpad.net:http",
+    ]
+    fluke = False
+    for pattern in fluke_patterns:
+        regex = re.compile(pattern, re.M)
+        if regex.search(job_log_txt):
+            fluke = True
+            break
+
+    return fluke
+
+
+def restart_travis_jobs(job_ids):
+    """Restart Travis jobs with specified job IDs."""
+
+
 def travis(github_account, repository, github_token, owner=None):
     """Scan Travis test runs for failures, and return notification to be sent to PR if one is found"""
     travis = travispy.TravisPy.github_auth(github_token)
@@ -344,35 +366,61 @@ def travis(github_account, repository, github_token, owner=None):
 
             jobs = [(job_id, job) for (job_id, job) in jobs if job.unsuccessful]
             if jobs:
-                job_url = os.path.join(TRAVIS_URL, repo_slug, 'jobs', jobs[0][0])
 
-                pr_comment += "\nOnly showing partial log for 1st failed test suite run %s;\n" % jobs[0][1].number
-                pr_comment += "full log at %s\n" % job_url
+                # detect fluke failures in jobs, and restart them
+                flukes = []
+                for (job_id, job) in jobs:
+                    if is_fluke(job.log.body):
+                        flukes.append(job_id)
 
-                # try to filter log to just the stuff that matters
-                retained_log_lines = jobs[0][1].log.body.split('\n')
-                for idx, log_line in enumerate(retained_log_lines):
-                    if repository == 'easybuild-easyconfigs':
-                        if log_line.startswith('FAIL:') or log_line.startswith('ERROR:'):
+                if flukes:
+                    boegel_gh_token = fetch_github_token('boegel')
+                    if boegel_gh_token:
+                        travis_boegel = travispy.TravisPy.github_auth(boegel_gh_token)
+                        for (job_id, job) in zip(flukes, travis_boegel.jobs(ids=flukes)):
+                            print "[id %s] PR #%s - fluke detected in job ID %s, restarting it!" % (bid, pr, job_id)
+                            if job.restart():
+                                print "Job ID %s restarted" % job_id
+                            else:
+                                print "Failed to restart job ID %s!" % job_id
+
+                        # filter out fluke jobs, we shouldn't report these
+                        jobs = [(job_id, job) for (job_id, job) in jobs if job_id not in flukes]
+                    else:
+                        print "Can't restart Travis jobs that failed due to flukes, no GitHub token found"
+
+                if jobs:
+                    job_url = os.path.join(TRAVIS_URL, repo_slug, 'jobs', jobs[0][0])
+                    pr_comment += "\nOnly showing partial log for 1st failed test suite run %s;\n" % jobs[0][1].number
+                    pr_comment += "full log at %s\n" % job_url
+
+                    # try to filter log to just the stuff that matters
+                    retained_log_lines = jobs[0][1].log.body.split('\n')
+                    for idx, log_line in enumerate(retained_log_lines):
+                        if repository == 'easybuild-easyconfigs':
+                            if log_line.startswith('FAIL:') or log_line.startswith('ERROR:'):
+                                retained_log_lines = retained_log_lines[idx:]
+                                break
+                        elif log_line.strip().endswith("$ python -O -m test.%s.suite" % repository.split('-')[-1]):
                             retained_log_lines = retained_log_lines[idx:]
                             break
-                    elif log_line.strip().endswith("$ python -O -m test.%s.suite" % repository.split('-')[-1]):
-                        retained_log_lines = retained_log_lines[idx:]
-                        break
 
-                pr_comment += '```\n...\n'
-                pr_comment += '\n'.join(retained_log_lines[-100:])
-                pr_comment += '\n```\n'
+                    pr_comment += '```\n...\n'
+                    pr_comment += '\n'.join(retained_log_lines[-100:])
+                    pr_comment += '\n```\n'
 
-                for (job_id, job) in jobs[1:]:
-                    job_url = os.path.join(TRAVIS_URL, repo_slug, 'jobs', job_id)
-                    pr_comment += "* %s - %s => %s\n" % (job.number, job.state, job_url)
+                    for (job_id, job) in jobs[1:]:
+                        job_url = os.path.join(TRAVIS_URL, repo_slug, 'jobs', job_id)
+                        pr_comment += "* %s - %s => %s\n" % (job.number, job.state, job_url)
 
-                if owner:
-                    pr_comment += "\n*(bleep, bloop, I'm just a bot, "
-                    pr_comment += "please talk to my owner @%s if you notice you me acting stupid)*" % owner
+                    if owner:
+                        pr_comment += "\n*(bleep, bloop, I'm just a bot, "
+                        pr_comment += "please talk to my owner @%s if you notice you me acting stupid)*" % owner
 
-                res.append((pr, pr_comment, check_msg))
+                    res.append((pr, pr_comment, check_msg))
+
+                else:
+                    print "(no more failed jobs after filtering out flukes for id %s PR #%s)" % (bid, pr)
 
     print "Processed %d builds, found %d PRs with failed builds to report back on" % (len(last_builds), len(res))
 
