@@ -32,6 +32,7 @@ import travispy
 from vsc.utils.generaloption import simple_option
 from vsc.utils.rest import RestClient
 
+from easybuild.tools.config import init_build_options
 from easybuild.tools.github import GITHUB_API_URL, fetch_github_token, post_comment_in_issue
 from easybuild.tools.ordereddict import OrderedDict
 from easybuild.tools.run import run_cmd
@@ -449,6 +450,7 @@ def main():
     actions = ['comment', 'merge', 'review', 'test', 'travis']
 
     go = simple_option(go_dict=opts)
+    init_build_options()
 
     # determine which action should be taken
     selected_action = None
