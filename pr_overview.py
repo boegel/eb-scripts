@@ -127,33 +127,15 @@ def fetch_pr_data(github, github_account, repository, pr):
     pr_data = None
     try:
         gh_repo = github.repos[github_account][repository]
-        status = None
-        while status is None:
-            try:
-                status, pr_data = gh_repo.pulls[pr].get()
-            except Exception as err:
-                print "PR #%d => Oops, encountered exception: %s" % (pr, err)
-                print "Trying again in 10s..."
-                time.sleep(10)
-                status = None
+        status, pr_data = gh_repo.pulls[pr].get()
         sys.stdout.write("[data]")
 
         # enhance PR data with test result for last commit
         pr_data['unit_test_result'] = 'UNKNOWN'
         if 'head' in pr_data:
             sha = pr_data['head']['sha']
-            status = None
-            while status is None:
-                try:
-                    gh_repo = github.repos[github_account][repository]
-                    status, status_data = gh_repo.commits[sha].status.get()
-                except socket.gaierror, err:
-                    raise EasyBuildError("Failed to download commit status for PR %s: %s", pr, err)
-                except Exception as err:
-                    print "SHA %s => Oops, encountered exception: %s" % (sha, err)
-                    print "Trying again in 10s..."
-                    time.sleep(10)
-                    status = None
+            gh_repo = github.repos[github_account][repository]
+            status, status_data = gh_repo.commits[sha].status.get()
             log.debug("status: %d, commit status data: %s", status, status_data)
             if status_data:
                 pr_data['combined_status'] = status_data['state']
@@ -161,15 +143,7 @@ def fetch_pr_data(github, github_account, repository, pr):
 
         # also pull in issue comments (note: these do *not* include review comments or commit comments)
         gh_repo = github.repos[github_account][repository]
-        status = None
-        while status is None:
-            try:
-                status, comments_data = gh_repo.issues[pr].comments.get()
-            except Exception as err:
-                print "issues #%d => Oops, encountered exception: %s" % (pr, err)
-                print "Trying again in 10s..."
-                time.sleep(10)
-                status = None
+        status, comments_data = gh_repo.issues[pr].comments.get()
         pr_data['issue_comments'] = {
             'users': [c['user']['login'] for c in comments_data],
             'bodies': [c['body'] for c in comments_data],
