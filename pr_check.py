@@ -317,6 +317,7 @@ def is_fluke(job_log_txt):
         r"fatal: unable to access .*: Failed to connect to github.com port [0-9]+: Connection timed out",
         r"Could not connect to ppa.launchpad.net.*, connection timed out",
         r"Failed to fetch .* Unable to connect to ppa.launchpad.net:http",
+        r"ERROR 504: Gateway Time-out",
     ]
     fluke = False
     for pattern in fluke_patterns:
