@@ -313,7 +313,7 @@ def test(pr_data, arg):
 def is_fluke(job_log_txt):
     """Detect fluke failures in Travis job log."""
     fluke_patterns = [
-        r"Failed to connect to s3.amazonaws.com port [0-9]+: Connection timed out",
+        r"Failed to connect to .* port [0-9]+: Connection timed out",
         r"fatal: unable to access .*: Failed to connect to github.com port [0-9]+: Connection timed out",
         r"Could not connect to ppa.launchpad.net.*, connection timed out",
         r"Failed to fetch .* Unable to connect to ppa.launchpad.net:http",
