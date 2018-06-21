@@ -319,6 +319,7 @@ def is_fluke(job_log_txt):
         r"Failed to fetch .* Unable to connect to ppa.launchpad.net:http",
         r"ERROR 504: Gateway Time-out",
         r"Could not connect to .*, connection timed out",
+        r"No output has been received in the last [0-9]*m[0-9]*s, this potentially indicates a stalled build",
     ]
     fluke = False
     for pattern in fluke_patterns:
