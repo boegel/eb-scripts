@@ -321,6 +321,7 @@ def is_fluke(job_log_txt):
         r"Could not connect to .*, connection timed out",
         r"No output has been received in the last [0-9]*m[0-9]*s, this potentially indicates a stalled build",
         r"curl.*SSL read: error",
+        r"A TLS packet with unexpected length was received",
     ]
     fluke = False
     for pattern in fluke_patterns:
