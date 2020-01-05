@@ -33,12 +33,12 @@ import sys
 import time
 
 try:
-   import pandas as pd
-   import matplotlib
-   matplotlib.use('PDF')  # must be done before next matplotlib import
-   import matplotlib.pyplot as plt
+    import pandas as pd
+    import matplotlib
+    matplotlib.use('PDF')  # must be done before next matplotlib import
+    import matplotlib.pyplot as plt
 except ImportError:
-   pass
+    pass
 
 from vsc.utils import fancylogger
 from vsc.utils.dateandtime import date_parser, datetime_parser
@@ -47,20 +47,18 @@ from vsc.utils.missing import nub
 from vsc.utils.rest import RestClient
 
 from easybuild.tools.build_log import EasyBuildError  # required to obtain an EasyBuild logger
-from easybuild.tools.github import GITHUB_API_URL, GITHUB_MAX_PER_PAGE, fetch_github_token, post_comment_in_issue
-from easybuild.tools.ordereddict import OrderedDict
-from easybuild.tools.run import run_cmd
+from easybuild.tools.github import GITHUB_API_URL, GITHUB_MAX_PER_PAGE, fetch_github_token
 
 log = fancylogger.getLogger()
 
 GROUPS = [
-    datetime.timedelta(7,0,0),  # 1 week
-    datetime.timedelta(14,0,0),  # 2 weeks
-    datetime.timedelta(30,0,0),  # ~1 month
-    datetime.timedelta(60,0,0),  # ~2 months
-    datetime.timedelta(180,0,0),  # ~6 months
+    datetime.timedelta(7, 0, 0),  # 1 week
+    datetime.timedelta(14, 0, 0),  # 2 weeks
+    datetime.timedelta(30, 0, 0),  # ~1 month
+    datetime.timedelta(60, 0, 0),  # ~2 months
+    datetime.timedelta(180, 0, 0),  # ~6 months
 ]
-ENDGROUP = datetime.timedelta(10**6, 0, 0) # very large
+ENDGROUP = datetime.timedelta(10**6, 0, 0)  # very large
 GROUP_LABELS = ['<1w', '1-2w', '2w-1m', '1-2m', '2-6m', '>6m']
 LAST_MONTH = datetime_parser('TODAY') - datetime.timedelta(30, 0, 0)
 LAST_YEAR = datetime_parser('TODAY') - datetime.timedelta(365, 0, 0)
@@ -169,12 +167,21 @@ def in_range(pr_nr, pr_range):
     return res
 
 
-def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_range=None, update=False):
+def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_range=None, update=False, since=None):
     """Fetch data for all PRs."""
     pr_range_low, pr_range_high = None, None
     if pr_range:
         pr_range_low = int(pr_range[0])
         pr_range_high = int(pr_range[1])
+
+    # check format of specified timestamp, add time if needed
+    if since:
+        since_regex = re.compile('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        if not since_regex.match(since):
+            raise EasyBuildError("Incorrect format for --since value: %s (does not match pattern '%s')",
+                                 since, since_regex.pattern)
+
+        since = '%sT23:59:59' % since
 
     if pickle_file:
         print("Loading PR data from %s" % pickle_file)
@@ -195,7 +202,11 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
         pr_cnt = pr_range_high - pr_range_low + 1
         # determine creation date of oldest PR
         pr_data = fetch_pr_data(github, github_account, repository, pr_range_low)
-        since = pr_data['created_at']
+
+        if since is None:
+            since = pr_data['created_at']
+        else:
+            raise EasyBuildError("Should not specify both --range and --since!")
     else:
         try:
             gh_repo = github.repos[github_account][repository]
@@ -205,7 +216,8 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
         log.debug("status: %d, prs: %s" % (status, prs))
         pr_cnt = max([pr['number'] for pr in prs])
 
-        since = '1970-01-01T00:00:01Z'
+        if since is None:
+            since = '1970-01-01T00:00:01Z'
 
     # check all issues in chunks of GITHUB_MAX_PER_PAGE, filter out PRs
     last_issue_nr = pr_range_low or 1
@@ -214,17 +226,26 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
         sys.stdout.write("\n%s %s/%s (since %s)\n\n" % (msg, last_issue_nr, max_pr, since))
         sys.stdout.flush()  # flush so progress is show with 'tee' too
 
-        try:
-            gh_repo = github.repos[github_account][repository]
-            status, issues_data = gh_repo.issues.get(since=since, per_page=GITHUB_MAX_PER_PAGE,
-                                                     state='all', sort='updated', direction='asc')
-        except socket.gaierror, err:
-            raise EasyBuildError("Failed to download issues since %s: %s", since, err)
+        ok = False
+        sleep_secs = 0
+        while not ok:
+            try:
+                gh_repo = github.repos[github_account][repository]
+                status, issues_data = gh_repo.issues.get(since=since, per_page=GITHUB_MAX_PER_PAGE,
+                                                         state='all', sort='updated', direction='asc')
+                ok = True
+            except socket.gaierror, err:
+                raise EasyBuildError("Failed to download issues since %s: %s", since, err)
+            except Exception as err:
+                print("Ignoring exception: %s" % err)
+                sleep_secs += 1
+                print("Sleeping for %d seconds..." % sleep_secs)
+                time.sleep(sleep_secs)
 
         log.debug("status: %d, issues data since %s: %s", status, since, issues_data)
 
         for issue in issues_data:
-            if 'pull_request' in issue and (update or not issue['number'] in pr_nrs):
+            if 'pull_request' in issue and (update or issue['number'] not in pr_nrs):
                 sys.stdout.write("* PR #%s" % issue['number'])
 
                 if not in_range(issue['number'], pr_range):
@@ -241,6 +262,7 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
                     status, more_pr_data = gh_repo.pulls[issue['number']].get()
                     pr_data['is_merged'] = more_pr_data['merged']
                     if pr_data['is_merged']:
+                        pr_data['merged_by'] = more_pr_data['merged_by']
                         sys.stdout.write(' [MERGED], ')
                     else:
                         sys.stdout.write(' [closed], ')
@@ -267,12 +289,17 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
 
         sys.stdout.write('\n')
         # update last issue nr and since timestamp
-        sorted_issues = sorted([issue['number'] for issue in issues_data])
-        last_issue_nr = sorted_issues[-1]
+        sorted_issues = sorted([(issue['updated_at'], issue['number']) for issue in issues_data])
         last_since = since
-        since = [issue for issue in issues_data if issue['number'] == last_issue_nr][0]['updated_at']
+        if sorted_issues:
+            last_issue_nr = max(last_issue_nr, max(x[1] for x in sorted_issues))
+            since = [issue for issue in issues_data if issue['number'] == last_issue_nr][0]['updated_at']
+        else:
+            since = last_since
         if last_since == since:
-            since = dateutil.parser.parse(since) + datetime.timedelta(hours=1)
+            if isinstance(since, basestring):
+                since = dateutil.parser.parse(since)
+            since = since + datetime.timedelta(hours=1)
             print "new since: ", since
 
     print("%s DONE!" % msg)
@@ -313,8 +340,8 @@ def pr_overview(prs_data, go):
 
     tup = (len(prs_data), total_open_cnt, len(by_user))
     print("Overview of %s pull requests (%s open), by user (%s users in total):\n" % tup)
-    cnts_by_user = [len([pr for pr in by_user[user] if pr['state'] == 'open']) for user in by_user]
-    sorted_users = [user for (_, user) in sorted(zip(cnts_by_user, by_user.keys()))]
+    cnts_by_user = [len([pr for pr in by_user[u] if pr['state'] == 'open']) for u in by_user]
+    sorted_users = [u for (_, u) in sorted(zip(cnts_by_user, by_user.keys()))]
     for user in sorted_users:
         open_cnt = len([pr for pr in by_user[user] if pr['state'] == 'open'])
         if open_cnt:
@@ -336,6 +363,8 @@ def plot_pr_stats(prs, go):
     plot_historic_PR_ages(created_ats, closed_ats, go.options.repository)
     plot_open_closed_PRs(created_ats, closed_ats, go.options.repository)
     plot_prs_by_author(created_ats, authors, go.options.repository)
+    print_prs_uniq_authors(created_ats, authors, go.options.repository)
+    plot_prs_merged(created_ats, prs, go.options.repository)
 
 
 def plot_historic_PR_ages(created_ats, closed_ats, repository):
@@ -343,7 +372,7 @@ def plot_historic_PR_ages(created_ats, closed_ats, repository):
     day = min(created_ats)
     days = []
     ages, ages_all, ages_rev = [], [], []
-    while day <= datetime_parser('TODAY'):
+    while day <= datetime_parser('TODAY') + ONE_DAY:
         days.append(day)
 
         open_counts = [0]*(len(GROUPS)+1)
@@ -357,6 +386,8 @@ def plot_historic_PR_ages(created_ats, closed_ats, repository):
         ages_rev.append(open_counts[:])
         open_counts.append(sum(open_counts))
         ages_all.append(open_counts[::-1])
+
+        print "%s: open = %s" % (day, open_counts[-1])
 
         day += ONE_DAY
 
@@ -409,7 +440,7 @@ def gen_pr_overview_page(prs, go):
         'merged_today': merged_today,
         'pr_cnt': pr_cnt,
         'repo': '%s/%s' % (go.options.github_account, go.options.repository),
-        'timestamp': last_update, #datetime.now().strftime(format='%d %B %Y %H:%M:%S'),
+        'timestamp': last_update,  # datetime.now().strftime(format='%d %B %Y %H:%M:%S'),
     })
     handle.close()
 
@@ -481,7 +512,7 @@ def plot_prs_by_author(created_ats, authors, repository):
 
     # filter author counts, only show top 10 author, collapse remaining authors into 'other'
     sorted_author_counts = sorted(enumerate(author_counts[-1]), key=lambda (_, y): y, reverse=True)
-    top_idxs = [idx for (idx, _) in sorted_author_counts[:20]]
+    top_idxs = [idx for (idx, _) in sorted_author_counts[:30]]
     other_idxs = [idx for idx in range(len(uniq_authors)) if idx not in top_idxs]
 
     plot_author_counts = []
@@ -507,6 +538,75 @@ def plot_prs_by_author(created_ats, authors, repository):
     res = pd_df.plot(kind='area', stacked=True, title="%s PRs by author (stacked)" % repository)
     res.legend(ncol=2, fontsize='small', loc='best')
     plt.savefig('%s_PR_per_author_stacked' % repository)
+
+
+def print_prs_uniq_authors(created_ats, authors, repository):
+
+    known_authors = set()
+    for pr_date, pr_author in zip(created_ats, authors):
+        if pr_author not in known_authors:
+            known_authors.add(pr_author)
+            print '%s\t%s\t%s' % (pr_date, pr_author, len(known_authors))
+
+
+def plot_prs_merged(created_ats, prs, repository):
+    """Plot stats on merged PRs."""
+    init_year = min(created_ats).year
+    curr_year = datetime_parser('TODAY').year
+
+    start_end_years = {}
+    for year in range(init_year, curr_year + 1):
+        start_year = datetime_parser('%s-01-01' % year)
+        end_year = datetime_parser('%s-12-31 23:59:59' % year)
+        start_end_years[year] = (start_year, end_year)
+        print year, len([x for x in created_ats if x >= start_year and x <= end_year])
+
+    prs_by_year = {}
+    for (created_at, pr) in zip(created_ats, prs):
+        for year, (start_year, end_year) in start_end_years.items():
+            if created_at >= start_year and created_at <= end_year:
+                prs_by_year.setdefault(year, []).append(pr)
+
+    gh_logins = ['boegel', 'verdurin', 'pescobar', 'vanzod', 'wpoely86', 'JensTimmerman', 'migueldiascosta']
+    maintainers = ['boegel', 'verdurin', 'pescobar', 'vanzod', 'wpoely86', 'migueldiascosta', 'akesandgren',
+                   'BartOldeman', 'damianam', 'ocaisa']
+    # (+ wpoely86 in 2016...)
+    hpcugent = ['JensTimmerman', 'Caylo', 'stdweird', 'itkovian', 'piojo', 'hpcugent', 'nudded', 'boegel']
+    gh_logins_bis = gh_logins + ['hajgato', 'fgeorgatos', 'RvDijk', 'JackPerdue', 'smoors', 'geimer', 'SimonPinches']
+    gh_logins_bis += ['Helios07', 'cstackpole', 'akesandgren', 'rubendibattista', 'BartOldeman', 'damianam', 'ocaisa',
+                      'stdweird', 'nudded', 'piojo', 'Caylo', 'hpcugent', 'Darkless012']
+
+    for year in sorted(start_end_years.keys()):
+        prs_cnt = len(prs_by_year[year])
+        prs_cnt_maintainers = len([pr for pr in prs_by_year[year] if pr['user']['login'] in maintainers])
+        prs_cnt_hpcugent = len([pr for pr in prs_by_year[year] if pr['user']['login'] in hpcugent])
+        prs_cnt_by = {}
+        for gh_login in gh_logins_bis:
+            prs_cnt_by[gh_login] = len([pr for pr in prs_by_year[year] if pr['user']['login'] == gh_login])
+
+        merged_prs = [pr for pr in prs_by_year[year] if pr.get('is_merged', False)]
+        merged_cnt = len(merged_prs)
+        merged_cnt_by = {}
+        for gh_login in gh_logins:
+            merged_cnt_by[gh_login] = len([pr for pr in merged_prs if pr['merged_by']['login'] == gh_login])
+
+        closed_cnt = len([pr for pr in prs_by_year[year] if pr['state'] == 'closed'])
+        open_cnt = len([pr for pr in prs_by_year[year] if pr['state'] == 'open'])
+
+        print '* %s: %s PRs' % (year, prs_cnt)
+        print '* %s unique contributors' % len(nub(pr['user']['login'] for pr in prs_by_year[year]))
+        print '* PRs by maintainers: %s' % prs_cnt_maintainers
+        print '* PRs by HPC-UGent: %s' % prs_cnt_hpcugent
+        for gh_login in gh_logins_bis:
+            print '- PRs by %s: ' % gh_login, prs_cnt_by[gh_login]
+        print '- merged: ', merged_cnt
+        for gh_login in gh_logins:
+            print '- merged by %s: ' % gh_login, merged_cnt_by[gh_login]
+        print '- closed: ', closed_cnt - merged_cnt
+        print '- open: ', open_cnt
+        new_pr_tag = "created using `eb --new-pr`"
+        print '- opened with --new-pr: ', len([pr for pr in prs_by_year[year] if new_pr_tag in (pr['body'] or '')])
+        print ''
 
 
 def gen_table_header():
@@ -550,12 +650,6 @@ def gen_table_rows(prs):
         "0",  # FIXME
     ]
     row_tmpl = "            [" + ', '.join(col_tmpls) + "],"
-
-
-    example_ut = [-1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-    example_sc = [-1, -1, -1,  0,  0,  0,  1,  1,  1, -1, -1, -1,  0,  0,  0,  1,  1,  1, -1, -1, -1,  0,  0,  0,  1,  1,  1]
-    example_tr = [-1,  0,  1, -1,  0,  1, -1,  0,  1, -1,  0,  1, -1,  0,  1, -1,  0,  1, -1,  0,  1, -1,  0,  1, -1,  0,  1]
-    example_statuses = [-3, -2, -1, -2, -1, 0, -1, 0, 1, -2, -1, 0, -1, 0, 1, 0, 1, 2, -1, 0, 1, 0, 1, 2, 1, 2, 3]
 
     merged_today = 0
     todays_date = date_parser('TODAY')
@@ -602,7 +696,8 @@ def gen_table_rows(prs):
 
         participants = len(nub(pr['issue_comments']['users']))
 
-        year, month, day, hour, minutes, seconds = pr['updated_at'].replace('T', '@')[:-1].replace(':', '@').replace('-', '@').split('@')
+        raw_updated_at = pr['updated_at'].replace('T', '@')[:-1].replace(':', '@').replace('-', '@')
+        year, month, day, hour, minutes, seconds = raw_updated_at.split('@')
         pr.update({
             'age': (datetime_parser('TODAY') - datetime_parser(pr['created_at'].split('T')[0])).days,
             'last_update': "new Date(%s, %s, %s, %s, %s, %s)" % (year, month, day, hour, minutes, seconds),
@@ -647,6 +742,8 @@ def main():
         'github-user': ("GitHub user to use (for authenticated access)", None, 'store', 'boegel', 'u'),
         'range': ("Range for PRs to take into account", None, 'store', None, 'x'),
         'repository': ("Repository to use", None, 'store', 'easybuild-easyconfigs', 'r'),
+        'since': ("Date to use to select range of issues for which to pull in data (e.g. 2019-10-24)",
+                  None, 'store', None, 's'),
         'type': ("Type of overview: 'dump', 'plot', 'print', or 'html'", 'choice',
                  'store_or_None', 'print', types.keys(), 't'),
         'update': ("Update existing data", None, 'store_true', False),
@@ -677,7 +774,7 @@ def main():
     downloading_msg = "Downloading PR data for %s/%s repo..." % (github_account, go.options.repository)
     print(downloading_msg)
     prs = fetch_prs_data(pickle_file, github, github_account, go.options.repository, downloading_msg,
-                         pr_range=pr_range, update=go.options.update)
+                         pr_range=pr_range, update=go.options.update, since=go.options.since)
 
     if go.options.type in types:
         types[go.options.type](prs, go)
