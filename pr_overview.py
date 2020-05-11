@@ -293,9 +293,15 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
         last_since = since
         if sorted_issues:
             last_issue_nr = max(last_issue_nr, max(x[1] for x in sorted_issues))
-            since = [issue for issue in issues_data if issue['number'] == last_issue_nr][0]['updated_at']
+            res = [issue for issue in issues_data if issue['number'] == last_issue_nr]
+            if res:
+                since = res[0]['updated_at']
+            else:
+                last_issue_nr = max(x[1] for x in sorted_issues)
+                since = [issue for issue in issues_data if issue['number'] == last_issue_nr][0]['updated_at']
         else:
             since = last_since
+
         if last_since == since:
             if isinstance(since, basestring):
                 since = dateutil.parser.parse(since)
