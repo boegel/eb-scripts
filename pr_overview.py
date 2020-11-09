@@ -24,13 +24,16 @@
 Print overview of pull requests for specified GitHub repository.
 @author: Kenneth Hoste (Ghent University)
 """
-import cPickle
-import dateutil.parser
+import pickle
 import datetime
 import re
 import socket
 import sys
 import time
+
+if sys.version_info[0] < 3:
+    sys.stderr.write("Use Python 3!\n")
+    sys.exit(1)
 
 try:
     import pandas as pd
@@ -40,14 +43,15 @@ try:
 except ImportError:
     pass
 
-from vsc.utils import fancylogger
-from vsc.utils.dateandtime import date_parser, datetime_parser
-from vsc.utils.generaloption import simple_option
-from vsc.utils.missing import nub
-from vsc.utils.rest import RestClient
+from easybuild.base import fancylogger
+from easybuild.base.generaloption import simple_option
+from easybuild.base.rest import RestClient
 
 from easybuild.tools.build_log import EasyBuildError  # required to obtain an EasyBuild logger
 from easybuild.tools.github import GITHUB_API_URL, GITHUB_MAX_PER_PAGE, fetch_github_token
+from easybuild.tools.utilities import nub
+
+from vsc.utils.dateandtime import date_parser, datetime_parser
 
 log = fancylogger.getLogger()
 
@@ -148,7 +152,7 @@ def fetch_pr_data(github, github_account, repository, pr):
         }
         sys.stdout.write("[comments], ")
 
-    except socket.gaierror, err:
+    except socket.gaierror as err:
         raise EasyBuildError("Failed to download PR #%s: %s", pr, err)
 
     return pr_data
@@ -185,7 +189,7 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
 
     if pickle_file:
         print("Loading PR data from %s" % pickle_file)
-        prs_data = cPickle.load(open(pickle_file, 'r'))
+        prs_data = pickle.load(open(pickle_file, 'rb'))
         pr_nrs = [pr['number'] for pr in prs_data]
     else:
         prs_data, pr_nrs = [], []
@@ -211,7 +215,7 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
         try:
             gh_repo = github.repos[github_account][repository]
             status, prs = gh_repo.pulls.get(per_page=GITHUB_MAX_PER_PAGE)
-        except socket.gaierror, err:
+        except socket.gaierror as err:
             raise EasyBuildError("Failed to download list of pull requests: %s" % err)
         log.debug("status: %d, prs: %s" % (status, prs))
         pr_cnt = max([pr['number'] for pr in prs])
@@ -234,7 +238,7 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
                 status, issues_data = gh_repo.issues.get(since=since, per_page=GITHUB_MAX_PER_PAGE,
                                                          state='all', sort='updated', direction='asc')
                 ok = True
-            except socket.gaierror, err:
+            except socket.gaierror as err:
                 raise EasyBuildError("Failed to download issues since %s: %s", since, err)
             except Exception as err:
                 print("Ignoring exception: %s" % err)
@@ -271,7 +275,7 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
 
                 pr_nr = pr_data['number']
                 if pr_nr in pr_nrs:
-                    for idx in xrange(len(prs_data)):
+                    for idx in range(len(prs_data)):
                         if prs_data[idx]['number'] == pr_nr:
                             prs_data[idx] = pr_data
                             break
@@ -303,14 +307,14 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
             since = last_since
 
         if last_since == since:
-            if isinstance(since, basestring):
-                since = dateutil.parser.parse(since)
+            if isinstance(since, str):
+                since = datetime.datetime.strptime(since)
             since = since + datetime.timedelta(hours=1)
-            print "new since: ", since
+            print("new since: ", since)
 
     print("%s DONE!" % msg)
     pickle_file = PICKLE_FILE % repository
-    cPickle.dump(prs_data, open(pickle_file, 'w'))
+    pickle.dump(prs_data, open(pickle_file, 'wb'))
     print("PR data dumped to %s" % pickle_file)
 
     return prs_data
@@ -324,7 +328,7 @@ def pr_overview(prs_data, go):
     print("Composing overview...")
     by_user = {}
     total_open_cnt = 0
-    print [pr_data for pr_data in prs_data if pr_data['state'] == 'open'][0]
+    print([pr_data for pr_data in prs_data if pr_data['state'] == 'open'][0])
     for pr_data in prs_data:
         user = pr_data['user']['login']
         if user not in by_user:
@@ -382,7 +386,7 @@ def plot_historic_PR_ages(created_ats, closed_ats, repository):
         days.append(day)
 
         open_counts = [0]*(len(GROUPS)+1)
-        for idx in xrange(0, len(created_ats)):
+        for idx in range(0, len(created_ats)):
             if created_ats[idx] <= day and closed_ats[idx] > day:
                 for i, grp in enumerate(GROUPS + [ENDGROUP]):
                     if day - created_ats[idx] < grp:
@@ -393,9 +397,11 @@ def plot_historic_PR_ages(created_ats, closed_ats, repository):
         open_counts.append(sum(open_counts))
         ages_all.append(open_counts[::-1])
 
-        print "%s: open = %s" % (day, open_counts[-1])
-
         day += ONE_DAY
+
+    print("%s: open = %s" % (days[-1], open_counts[-1]))
+
+    days = pd.to_datetime(days)
 
     pd_df_all = pd.DataFrame(ages_all, days, columns=['all']+GROUP_LABELS[::-1]).sort_index().fillna(method='ffill')
     res = pd_df_all.plot(kind='area', stacked=False, title="open %s PRs, by age" % repository)
@@ -412,12 +418,12 @@ def plot_historic_PR_ages(created_ats, closed_ats, repository):
     res.legend(ncol=len(GROUP_LABELS), fontsize='small')
     plt.savefig('%s_PR_stats_all_stacked' % repository)
 
-    pd_df_all_year = pd_df_all.select(lambda d: d > LAST_YEAR)
+    pd_df_all_year = pd_df_all.loc[LAST_YEAR:]
     res = pd_df_all_year.plot(kind='area', stacked=False, title="open %s PRs, by age (last year)" % repository)
     res.legend(ncol=len(GROUP_LABELS)+1, fontsize='small')
     plt.savefig('%s_PR_stats_year' % repository)
 
-    pd_df_all_month = pd_df_all.select(lambda d: d > LAST_MONTH)
+    pd_df_all_month = pd_df_all.loc[LAST_MONTH:]
     res = pd_df_all_month.plot(kind='area', stacked=False, title="open %s PRs, by age (last month)" % repository)
     res.legend(ncol=len(GROUP_LABELS)+1, fontsize='small')
     plt.savefig('%s_PR_stats_month' % repository)
@@ -471,7 +477,7 @@ def plot_open_closed_PRs(created_ats, closed_ats, repository):
     res.legend(loc='upper left', ncol=3, fontsize='small')
     plt.savefig('%s_opened_closed_PRs' % repository)
 
-    pd_df_month = pd_df.select(lambda d: d > LAST_MONTH)
+    pd_df_month = pd_df.loc[LAST_MONTH:]
     res = pd_df_month.plot(kind='bar', title="open/opened/closed PRs (last month)")
     res.legend(loc='upper left', ncol=3, fontsize='small')
     plt.savefig('%s_opened_closed_PRs_month' % repository)
@@ -481,12 +487,12 @@ def plot_open_closed_PRs(created_ats, closed_ats, repository):
     res.legend(loc='upper left', ncol=3, fontsize='small')
     plt.savefig('%s_opened_closed_PRs_cumulative' % repository)
 
-    pd_df_total_year = pd_df_total.select(lambda d: d > LAST_YEAR)
+    pd_df_total_year = pd_df_total.loc[LAST_YEAR:]
     res = pd_df_total_year.plot(kind='line', title="total open/opened/closed %s PRs (last year)" % repository)
     res.legend(loc='upper left', ncol=3, fontsize='small')
     plt.savefig('%s_opened_closed_PRs_cumulative_year' % repository)
 
-    pd_df_total_month = pd_df_total.select(lambda d: d > LAST_MONTH)
+    pd_df_total_month = pd_df_total.loc[LAST_MONTH:]
     res = pd_df_total_month.plot(kind='line', title="total open/opened/closed %s PRs (last month)" % repository)
     res.legend(loc='upper left', ncol=3, fontsize='small')
     plt.savefig('%s_opened_closed_PRs_cumulative_month' % repository)
@@ -498,14 +504,14 @@ def plot_prs_by_author(created_ats, authors, repository):
     days = []
 
     uniq_authors = nub(authors)
-    print "Found %d unique PR authors for %s repository" % (len(uniq_authors), repository)
+    print("Found %d unique PR authors for %s repository" % (len(uniq_authors), repository))
     author_counts = []
 
     while day <= datetime_parser('TODAY'):
         days.append(day)
 
         counts = [0] * len(uniq_authors)
-        for idx in xrange(0, len(created_ats)):
+        for idx in range(0, len(created_ats)):
             if created_ats[idx] <= day:
                 for i, author in enumerate(uniq_authors):
                     if authors[idx] == author:
@@ -517,7 +523,7 @@ def plot_prs_by_author(created_ats, authors, repository):
         day += ONE_DAY
 
     # filter author counts, only show top 10 author, collapse remaining authors into 'other'
-    sorted_author_counts = sorted(enumerate(author_counts[-1]), key=lambda (_, y): y, reverse=True)
+    sorted_author_counts = sorted(enumerate(author_counts[-1]), key=lambda x: x[1], reverse=True)
     top_idxs = [idx for (idx, _) in sorted_author_counts[:30]]
     other_idxs = [idx for idx in range(len(uniq_authors)) if idx not in top_idxs]
 
@@ -552,7 +558,7 @@ def print_prs_uniq_authors(created_ats, authors, repository):
     for pr_date, pr_author in zip(created_ats, authors):
         if pr_author not in known_authors:
             known_authors.add(pr_author)
-            print '%s\t%s\t%s' % (pr_date, pr_author, len(known_authors))
+            print('%s\t%s\t%s' % (pr_date, pr_author, len(known_authors)))
 
 
 def plot_prs_merged(created_ats, prs, repository):
@@ -565,7 +571,7 @@ def plot_prs_merged(created_ats, prs, repository):
         start_year = datetime_parser('%s-01-01' % year)
         end_year = datetime_parser('%s-12-31 23:59:59' % year)
         start_end_years[year] = (start_year, end_year)
-        print year, len([x for x in created_ats if x >= start_year and x <= end_year])
+        print((year, len([x for x in created_ats if x >= start_year and x <= end_year])))
 
     prs_by_year = {}
     for (created_at, pr) in zip(created_ats, prs):
@@ -599,20 +605,20 @@ def plot_prs_merged(created_ats, prs, repository):
         closed_cnt = len([pr for pr in prs_by_year[year] if pr['state'] == 'closed'])
         open_cnt = len([pr for pr in prs_by_year[year] if pr['state'] == 'open'])
 
-        print '* %s: %s PRs' % (year, prs_cnt)
-        print '* %s unique contributors' % len(nub(pr['user']['login'] for pr in prs_by_year[year]))
-        print '* PRs by maintainers: %s' % prs_cnt_maintainers
-        print '* PRs by HPC-UGent: %s' % prs_cnt_hpcugent
+        print('* %s: %s PRs' % (year, prs_cnt))
+        print('* %s unique contributors' % len(nub(pr['user']['login'] for pr in prs_by_year[year])))
+        print('* PRs by maintainers: %s' % prs_cnt_maintainers)
+        print('* PRs by HPC-UGent: %s' % prs_cnt_hpcugent)
         for gh_login in gh_logins_bis:
-            print '- PRs by %s: ' % gh_login, prs_cnt_by[gh_login]
-        print '- merged: ', merged_cnt
+            print('- PRs by %s: ' % gh_login, prs_cnt_by[gh_login])
+        print('- merged: ', merged_cnt)
         for gh_login in gh_logins:
-            print '- merged by %s: ' % gh_login, merged_cnt_by[gh_login]
-        print '- closed: ', closed_cnt - merged_cnt
-        print '- open: ', open_cnt
+            print('- merged by %s: ' % gh_login, merged_cnt_by[gh_login])
+        print('- closed: ', closed_cnt - merged_cnt)
+        print('- open: ', open_cnt)
         new_pr_tag = "created using `eb --new-pr`"
-        print '- opened with --new-pr: ', len([pr for pr in prs_by_year[year] if new_pr_tag in (pr['body'] or '')])
-        print ''
+        print('- opened with --new-pr: ', len([pr for pr in prs_by_year[year] if new_pr_tag in (pr['body'] or '')]))
+        print('')
 
 
 def gen_table_header():
@@ -726,13 +732,13 @@ def gen_table_rows(prs):
 
 
 def dump_data(prs, go):
-    print 'PR#,user,state,created,merged,new_pr'
+    print('PR#,user,state,created,merged,new_pr')
     for pr in sorted(prs, key=(lambda x: x['number'])):
         created = pr['created_at'].replace('T', ' ').replace('Z', '')
         state = pr['state']
         is_merged = pr.get('is_merged')
         using_new_pr = "eb --new-pr" in (pr['body'] or '')
-        print "%s,%s,%s,%s,%s,%s" % (pr['number'], pr['user']['login'], state, created, is_merged, using_new_pr)
+        print("%s,%s,%s,%s,%s,%s" % (pr['number'], pr['user']['login'], state, created, is_merged, using_new_pr))
 
 
 def main():
@@ -751,7 +757,7 @@ def main():
         'since': ("Date to use to select range of issues for which to pull in data (e.g. 2019-10-24)",
                   None, 'store', None, 's'),
         'type': ("Type of overview: 'dump', 'plot', 'print', or 'html'", 'choice',
-                 'store_or_None', 'print', types.keys(), 't'),
+                 'store_or_None', 'print', list(types.keys()), 't'),
         'update': ("Update existing data", None, 'store_true', False),
     }
 
@@ -762,7 +768,7 @@ def main():
 
     pr_range = None
     if go.options.range:
-        print go.options.range
+        print(go.options.range)
         range_regex = re.compile('^[0-9]+-[0-9]+$')
         if range_regex.match(go.options.range):
             pr_range = go.options.range.split('-')
