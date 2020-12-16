@@ -581,12 +581,13 @@ def plot_prs_merged(created_ats, prs, repository):
 
     gh_logins = ['boegel', 'verdurin', 'pescobar', 'vanzod', 'wpoely86', 'JensTimmerman', 'migueldiascosta']
     maintainers = ['boegel', 'verdurin', 'pescobar', 'vanzod', 'wpoely86', 'migueldiascosta', 'akesandgren',
-                   'BartOldeman', 'damianam', 'ocaisa']
+                   'BartOldeman', 'damianam', 'ocaisa', 'Micket', 'zao', 'smoors', 'lexming',
+                   'casparvl', 'branfosj']
     # (+ wpoely86 in 2016...)
     hpcugent = ['JensTimmerman', 'Caylo', 'stdweird', 'itkovian', 'piojo', 'hpcugent', 'nudded', 'boegel']
     gh_logins_bis = gh_logins + ['hajgato', 'fgeorgatos', 'RvDijk', 'JackPerdue', 'smoors', 'geimer', 'SimonPinches']
     gh_logins_bis += ['Helios07', 'cstackpole', 'akesandgren', 'rubendibattista', 'BartOldeman', 'damianam', 'ocaisa',
-                      'stdweird', 'nudded', 'piojo', 'Caylo', 'hpcugent', 'Darkless012']
+                      'stdweird', 'nudded', 'piojo', 'Caylo', 'hpcugent', 'Darkless012', 'zarybnicky', 'deniskristak']
 
     for year in sorted(start_end_years.keys()):
         prs_cnt = len(prs_by_year[year])
