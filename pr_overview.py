@@ -308,7 +308,7 @@ def fetch_prs_data(pickle_file, github, github_account, repository, msg, pr_rang
 
         if last_since == since:
             if isinstance(since, str):
-                since = datetime.datetime.strptime(since)
+                since = datetime.datetime.strptime(since, '%Y-%m-%dT%H:%M:%SZ')
             since = since + datetime.timedelta(hours=1)
             print("new since: ", since)
 
@@ -579,15 +579,16 @@ def plot_prs_merged(created_ats, prs, repository):
             if created_at >= start_year and created_at <= end_year:
                 prs_by_year.setdefault(year, []).append(pr)
 
-    gh_logins = ['boegel', 'verdurin', 'pescobar', 'vanzod', 'wpoely86', 'JensTimmerman', 'migueldiascosta']
+    gh_logins = ['boegel', 'verdurin', 'pescobar', 'vanzod', 'wpoely86', 'bedroge', 'migueldiascosta']
     maintainers = ['boegel', 'verdurin', 'pescobar', 'vanzod', 'wpoely86', 'migueldiascosta', 'akesandgren',
                    'BartOldeman', 'damianam', 'ocaisa', 'Micket', 'zao', 'smoors', 'lexming',
-                   'casparvl', 'branfosj']
+                   'casparvl', 'branfosj', 'SebastianAchilles', 'bedroge', 'hajgato']
     # (+ wpoely86 in 2016...)
     hpcugent = ['JensTimmerman', 'Caylo', 'stdweird', 'itkovian', 'piojo', 'hpcugent', 'nudded', 'boegel']
     gh_logins_bis = gh_logins + ['hajgato', 'fgeorgatos', 'RvDijk', 'JackPerdue', 'smoors', 'geimer', 'SimonPinches']
     gh_logins_bis += ['Helios07', 'cstackpole', 'akesandgren', 'rubendibattista', 'BartOldeman', 'damianam', 'ocaisa',
-                      'stdweird', 'nudded', 'piojo', 'Caylo', 'hpcugent', 'Darkless012', 'zarybnicky', 'deniskristak']
+                      'stdweird', 'nudded', 'piojo', 'Caylo', 'hpcugent', 'Darkless012', 'zarybnicky', 'deniskristak',
+                      'ItIsI-Orient']
 
     for year in sorted(prs_by_year.keys()):
         prs_cnt = len(prs_by_year[year])
